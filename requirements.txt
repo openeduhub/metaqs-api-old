@@ -6,3 +6,10 @@ setuptools==49.6.0
 starlette==0.14.2
 typing-extensions==3.10.0.0
 wheel==0.36.2
+requests
+python-dotenv
+numpy
+pandas
+uvicorn[standard]
+elasticsearch
+elasticsearch-dsl
