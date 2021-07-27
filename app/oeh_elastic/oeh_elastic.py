@@ -13,8 +13,8 @@ from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import ConnectionError
 from numpy import inf
 
-from .elastic_query import AggQuery
-from .helper_classes import Bucket, CollectionInfo, SearchedMaterialInfo
+from app.oeh_elastic.elastic_query import AggQuery
+from app.oeh_elastic.helper_classes import Bucket, CollectionInfo, SearchedMaterialInfo
 
 load_dotenv()
 
@@ -38,10 +38,10 @@ ES_PREVIEW_URL = "https://redaktion.openeduhub.net/edu-sharing/preview?maxWidth=
 SOURCE_FIELDS = [
     "nodeRef",
     "type",
-    "properties.cclom:title" # title of io objects,
+    "properties.cclom:title",  # title of io objects,
     "properties.ccm:wwwurl",
     "properties.cm:name",
-    "properties.cm:title" # title of collections and objects
+    "properties.cm:title",  # title of collections and objects
     "path"
 ]
 
@@ -103,16 +103,16 @@ class OEHElastic:
         self.get_oeh_search_analytics(
             timestamp=None, count=ANALYTICS_INITIAL_COUNT)
 
-    def get_collections(
+    def get_collection_children(
             self,
             collection_id: str,
-            doc_threshold: int = 0
+            doc_threshold: float = 0
     ) -> set[CollectionInfo]:
         """
         Returns a set of CollectionInfo class 
         if there is no material present in that collection (or less than the threshold value).
 
-        :type doc_threshold: int
+        :type doc_threshold: float
         :param collection_id: ID of the Fachportal you want to look information up from.
         :param doc_threshold: Threshold of documents to be at least in a collection
         """
@@ -162,22 +162,23 @@ class OEHElastic:
             )
             agg = self.get_aggregations(agg_query)
             buckets = oeh.build_buckets_from_agg(agg)
-            res = set()
+            collections = set()
             for item in raw_collection_children.get("hits", {}).get("hits", []):
+                # TODO add this to a parse function
                 _id = item.get("_source").get("nodeRef").get("id")
-                title = item.get("_source").get("properties").get("cm:title")
-                path = item.get("_source").get("path")
+                title = item.get("_source").get("properties").get("cm:title", "")
+                path = item.get("_source").get("path", [])
 
                 # check if a corresponding collection is in buckets and add doc count from there
+                # TODO add this to an extra agg function
                 doc_count = next((bucket.doc_count for bucket in buckets if bucket == _id), 0)
                 if doc_count <= doc_threshold and check_for_resources_in_subcollection(_id):
-                    res.add(CollectionInfo(
+                    collections.add(CollectionInfo(
                         id=_id,
                         title=title,
                         count_total_resources=doc_count,
-                        path=path,
-                        type="ccm:map"))
-            return res
+                        path=path))
+            return collections
 
         raw_collection_children = self.get_collection_children_by_id(collection_id)
         collection_children: set[CollectionInfo] = parse_raw_collection_children(raw_collection_children)
@@ -276,6 +277,41 @@ class OEHElastic:
             "_source": SOURCE_FIELDS
         }
         return self.query_elastic(body=body, index="workspace", pretty=True)
+
+    def get_collection_info(self, id: str) -> CollectionInfo:
+        body = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"terms": {"type": ["ccm:map"]}},
+                        {"bool": {
+                            "should": [
+                                {"match": {"nodeRef.id": id}},
+                            ]
+                        }
+                        }
+                    ]
+                }
+            },
+            "size": 10000,
+            "track_total_hits": "true",
+            "_source": SOURCE_FIELDS
+        }
+        r = self.query_elastic(body=body, index="workspace", pretty=True)
+
+        return self.query_elastic(body=body, index="workspace", pretty=True)
+
+    def parse_query_result(self, result: dict):
+        id = result.get("_source").get("nodeRef").get("id")
+        title = result.get("_source").get("properties").get("cm:title", "")
+        path = result.get("_source").get("path", [])
+
+        return CollectionInfo(
+            id=id,
+            title=title,
+            path=path
+        )
+
 
     def getMaterialByMissingAttribute(self, collection_id: str, attribute: str, size: int = 10000) -> dict:
         """
@@ -624,8 +660,10 @@ oeh = OEHElastic()
 
 if __name__ == "__main__":
     print("\n\n\n\n")
-    r = oeh.get_collections(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)
+    r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
+    r = oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)
     r_parsed = [c.as_dict() for c in r]
     print(r)
 else:
-    oeh.get_collections(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629")
+    r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
+    oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)

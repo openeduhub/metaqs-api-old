@@ -1,7 +1,7 @@
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import TypedDict, Literal
+from typing import TypedDict, Literal, Optional, List
 
 from .constants import (ES_COLLECTION_URL, ES_NODE_URL,
                         ES_PREVIEW_URL)
@@ -44,20 +44,20 @@ class Bucket:
 @dataclass
 class CollectionInfo:
     id: str
-    path: list = field(default_factory=list)
-    es_url: str = field(init=False)
-    name: str = ""
-    title: str = ""
-    type: str = ""
-    content_url: str = ""
-    action: str = ""
-    count_total_resources: int = 0
+    path: List[str] = field(default_factory=list)
+    # es_url: str = field(init=False)
+    name: Optional[str] = ""
+    title: Optional[str] = ""
+    type: Optional[str] = "ccm:map"
+    content_url: Optional[str] = ""
+    action: Optional[str] = ""
+    count_total_resources: Optional[int] = 0
 
-    def __post_init__(self):
-        if self.type == 'ccm:map':
-            self.es_url = ES_COLLECTION_URL.format(self.id)
-        else:
-            self.es_url = ES_NODE_URL.format(self.id, self.action)
+    # def __post_init__(self):
+    #     if self.type == 'ccm:map':
+    #         self.es_url = ES_COLLECTION_URL.format(self.id)
+    #     else:
+    #         self.es_url = ES_NODE_URL.format(self.id, self.action)
 
     def __eq__(self, o: object) -> bool:
         if isinstance(o, CollectionInfo):
@@ -71,8 +71,13 @@ class CollectionInfo:
     def as_dict(self):
         return {
             "id": self.id,
-            "title": self.title,
             "path": self.path,
+            # "es_url": self.es_url,
+            "name": self.name,
+            "title": self.title,
+            "type": self.type,
+            "content_url": self.content_url,
+            "action": self.action,
             "count_total_resources": self.count_total_resources
         }
 
