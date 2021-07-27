@@ -1,30 +1,26 @@
-from fastapi import FastAPI
-from oeh_elastic import oeh
-from oeh_elastic.helper_classes import CollectionInfo
-from numpy import inf
 import uvicorn
+from fastapi import FastAPI
+from numpy import inf
+
+from dataclasses import asdict
+
+from app.oeh_elastic import oeh
+from app.oeh_elastic.helper_classes import CollectionInfo
+
 
 app = FastAPI()
 
 
 @app.get("/")
 def read_root():
-    return {"Hello": "World"}
+    return {"Hello": "World!"}
 
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: str = None):
-    return {"item_id": item_id, "q": q}
-
-@app.get("/collections/{_id}/collections")
-def read_id(_id: str, q: list = None):
-    r: set[CollectionInfo] = oeh.collections_by_fachportale(
-        fachportal_key=_id,
+# TODO add collections endpoint to return list of alle collections
+@app.get("/collections/{id}/collections")
+def read_collection_id(id: str):
+    r: set[CollectionInfo] = oeh.get_collections(
+        collection_id=id,
         doc_threshold=inf)
-    r_parsed = [c.as_dict() for c in r]
-    return {"item_id": _id, "q": r_parsed}
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-else:
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    r_parsed = [asdict(c) for c in r]
+    return {"id": id, "children": r_parsed}

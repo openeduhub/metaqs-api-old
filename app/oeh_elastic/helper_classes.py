@@ -4,20 +4,8 @@ from datetime import datetime, timedelta
 from typing import TypedDict, Literal
 
 from .constants import (ES_COLLECTION_URL, ES_NODE_URL,
-                                          ES_PREVIEW_URL)
+                        ES_PREVIEW_URL)
 
-
-@dataclass
-class Slider:
-    _id: str
-    min: int
-    max: int
-    step: int
-    value: int
-    marks: dict = field(init=False)
-
-    def __post_init__(self):
-        self.marks = {i: '{}'.format(i) for i in range(self.max+1)}
 
 class Licenses(TypedDict):
     oer: int
@@ -35,14 +23,14 @@ class Bucket:
         return {
             "key": self.key,
             "doc_count": self.doc_count
-        }
 
+        }
     def as_wc(self):
         return {
             "text": self.key,
             "value": self.doc_count
         }
-    
+
     def __eq__(self, o) -> bool:
         if self.key == o:
             return True
@@ -55,34 +43,34 @@ class Bucket:
 
 @dataclass
 class CollectionInfo:
-    _id: str
+    id: str
+    path: list = field(default_factory=list)
+    es_url: str = field(init=False)
     name: str = ""
     title: str = ""
-    _type: str = ""
+    type: str = ""
     content_url: str = ""
     action: str = ""
     count_total_resources: int = 0
-    path: list = field(default_factory=list)
-    es_url: str = field(init=False)
 
     def __post_init__(self):
-        if self._type == 'ccm:map':
-            self.es_url = ES_COLLECTION_URL.format(self._id)
+        if self.type == 'ccm:map':
+            self.es_url = ES_COLLECTION_URL.format(self.id)
         else:
-            self.es_url = ES_NODE_URL.format(self._id, self.action)
+            self.es_url = ES_NODE_URL.format(self.id, self.action)
 
     def __eq__(self, o: object) -> bool:
         if isinstance(o, CollectionInfo):
-            return (self._id == o._id)
+            return self.id == o.id
         else:
             return False
 
     def __hash__(self) -> int:
-        return hash((self._id,))
+        return hash((self.id,))
 
     def as_dict(self):
         return {
-            "id": self._id,
+            "id": self.id,
             "title": self.title,
             "path": self.path,
             "count_total_resources": self.count_total_resources

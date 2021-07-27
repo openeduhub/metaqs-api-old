@@ -1,5 +1,6 @@
 from typing import Literal
 
+
 class ElasticQuery:
     def __init__(self, **kwargs):
         self.attribute: str = kwargs.get("attribute", None)
