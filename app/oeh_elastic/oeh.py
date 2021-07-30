@@ -4,7 +4,7 @@ import logging
 import os
 from collections import Counter, defaultdict
 from time import sleep
-from typing import Generator, Literal
+from typing import Generator, Literal, Union
 
 import pandas as pd
 import requests
@@ -13,46 +13,22 @@ from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import ConnectionError
 from numpy import inf
 
+from app.oeh_elastic.constants import MAX_CONN_RETRIES, SOURCE_FIELDS, ANALYTICS_INITIAL_COUNT
 from app.oeh_elastic.elastic_query import AggQuery
-from app.oeh_elastic.helper_classes import Bucket, CollectionInfo, SearchedMaterialInfo
+from app.oeh_cache.oeh_cache import Cache
+from app.oeh_elastic.helper_classes import Bucket, Collection, SearchedMaterialInfo
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-
-def set_conn_retries():
-    MAX_CONN_RETRIES = os.getenv("MAX_CONN_RETRIES", float(inf))
-    if MAX_CONN_RETRIES == "inf":
-        return float(inf)
-    else:
-        if type(eval(MAX_CONN_RETRIES)) == int:
-            return eval(MAX_CONN_RETRIES)
-        else:
-            raise TypeError(
-                f"MAX_CONN_RETRIES: {eval(MAX_CONN_RETRIES)} is not an integer")
-
-
-MAX_CONN_RETRIES = set_conn_retries()
-ES_PREVIEW_URL = "https://redaktion.openeduhub.net/edu-sharing/preview?maxWidth=200&maxHeight=200&crop=true&storeProtocol=workspace&storeId=SpacesStore&nodeId={}"
-SOURCE_FIELDS = [
-    "nodeRef",
-    "type",
-    "properties.cclom:title",  # title of io objects,
-    "properties.ccm:wwwurl",
-    "properties.cm:name",
-    "properties.cm:title",  # title of collections and objects
-    "path"
-]
-
-ANALYTICS_INITIAL_COUNT = eval(os.getenv("ANALYTICS_INITIAL_COUNT", 10000))
+logging.basicConfig(level=logging.INFO)
 
 
 class EduSharing:
     connection_retries: int = 0
 
     @classmethod
-    def get_collections(cls):
+    def get_collections(cls) -> list[dict]:
         ES_COLLECTIONS_URL = "https://redaktion.openeduhub.net/edu-sharing/rest/collection/v1/collections/local/5e40e372-735c-4b17-bbf7-e827a5702b57/children/collections?scope=TYPE_EDITORIAL&skipCount=0&maxItems=1247483647&sortProperties=cm%3Acreated&sortAscending=true&"
 
         headers = {
@@ -86,6 +62,24 @@ class EduSharing:
                 sleep(30)
                 return EduSharing.get_collections()
 
+    def parse_collections(self, raw_collections: list[dict]) -> set[Collection]:
+        collections = set()
+        for item in raw_collections:
+            title = item.get("title", None)
+            name = item.get("name", None)
+            _type = item.get("type", None)
+            id = item.get("ref", {}).get("id", None)
+            collections.add(Collection(
+                id=id,
+                name=name,
+                title=title,
+                type=_type
+            ))
+        return collections
+
+
+edu_sharing = EduSharing()
+
 
 class OEHElastic:
     es: Elasticsearch
@@ -99,26 +93,93 @@ class OEHElastic:
         # dict with collections as keys and a list of Searched Material Info as values
         self.searched_materials_by_collection: dict[str, SearchedMaterialInfo] = {}
         self.all_searched_materials: set[SearchedMaterialInfo] = set()
+        self.cache = Cache()
 
-        self.get_oeh_search_analytics(
-            timestamp=None, count=ANALYTICS_INITIAL_COUNT)
+        # TODO we might turn this on again later
+        # self.get_oeh_search_analytics(
+        #     timestamp=None, count=ANALYTICS_INITIAL_COUNT)
+
+    def query_elastic(self, body, index, pretty: bool = True):
+        try:
+            r = self.es.search(body=body, index=index, pretty=pretty)
+            self.connection_retries = 0
+            return r
+        except ConnectionError:
+            if self.connection_retries < MAX_CONN_RETRIES:
+                self.connection_retries += 1
+                logger.error(
+                    f"Connection error while trying to reach elastic instance, trying again in 30 seconds. Retries {self.connection_retries}")
+                sleep(30)
+                return self.query_elastic(body, index, pretty)
+
+    def load_cache(self, update: bool = False):
+        if self.cache.load_cache() and update is False:
+            return True
+        else:
+            self.build_cache()
+            self.save_cache()
+
+    def build_cache(self):
+        logger.info("Building collecition bucket cache...")
+        self.cache.collection_buckets = self.build_collection_buckets_cache()
+        logger.info("Building fachportale cache...")
+        self.cache.fachportale = self.build_fachportale_cache()
+        logger.info("building fachportale with children cache...")
+        self.cache.fachportale_with_children = self.build_fachportale_with_children_cache()
+
+    def save_cache(self):
+        self.cache.save_cache_to_disk()
+
+    # TODO add save function
+    def build_collection_buckets_cache(self) -> list[Bucket]:
+        collection_aggregations_query = AggQuery(attribute="collections.nodeRef.id.keyword")
+        collection_aggregations_cache = self.get_aggregations(collection_aggregations_query)
+        return self.build_buckets_from_agg(collection_aggregations_cache)
+
+    # TODO add save function
+    def build_fachportale_cache(self) -> set[Collection]:
+        return self.build_fachportale()
+
+    def build_fachportale_with_children_cache(self) -> dict[Collection, list[Collection]]:
+        fachportale_with_children = {}
+        for item in self.cache.fachportale:
+            children = self.get_collection_children(collection_id=item.id)
+            fachportale_with_children[item] = children
+        return fachportale_with_children
+
+    def get_fachportale(self):
+        if self.cache.fachportale:
+            return self.cache.fachportale
+        else:
+            self.build_fachportale_cache()
+
+    def get_collection_buckets(self):
+        return self.cache.collection_buckets
 
     def get_collection_children(
             self,
             collection_id: str,
-            doc_threshold: float = 0
-    ) -> set[CollectionInfo]:
+            doc_threshold: Union[float, int] = inf
+    ) -> set[Collection]:
         """
         Returns a set of CollectionInfo class 
         if there is no material present in that collection (or less than the threshold value).
 
-        :type doc_threshold: float
+        :type doc_threshold: Union[float, int]
         :param collection_id: ID of the Fachportal you want to look information up from.
         :param doc_threshold: Threshold of documents to be at least in a collection
         """
-        logger.info(f"getting collections with threshold of {doc_threshold} and key: {collection_id}")
+        logger.info(f"getting collections with threshold of \"{doc_threshold}\" and key: \"{collection_id}\"")
 
-        def check_for_resources_in_subcollection(subcollection_id: str):
+        # TODO This might be useful in some other case, so maybe put it outside as class method
+        def check_number_of_resources_in_collection(collection_id: str) -> bool:
+            """
+            Checks if there are resources (ccm:io) that have a given collection id in there path.
+            We check if the total hits are lower than or equal the doc_threshold value, because that indicates
+            how many documents are present in that collection.
+            :param collection_id:
+            :return:
+            """
             body = {
                 "query": {
                     "bool": {
@@ -135,7 +196,7 @@ class OEHElastic:
                                     "should": [
                                         {
                                             "match": {
-                                                "path": subcollection_id
+                                                "path": collection_id
                                             }
                                         }
                                     ]
@@ -154,50 +215,43 @@ class OEHElastic:
             else:
                 return False
 
-        def parse_raw_collection_children(raw_collection_children: dict) -> set[CollectionInfo]:
-            # TODO this agg query will return an overview of all collections and the documents they contain
-            # this could be cached
-            agg_query = AggQuery(
-                attribute="collections.nodeRef.id.keyword"
-            )
-            agg = self.get_aggregations(agg_query)
-            buckets = oeh.build_buckets_from_agg(agg)
+        def parse_raw_collection_children(raw_collection_children: dict) -> set[Collection]:
+            buckets = self.get_collection_buckets()
             collections = set()
             for item in raw_collection_children.get("hits", {}).get("hits", []):
                 # TODO add this to a parse function
-                _id = item.get("_source").get("nodeRef").get("id")
+                id = item.get("_source").get("nodeRef").get("id")
                 title = item.get("_source").get("properties").get("cm:title", "")
                 path = item.get("_source").get("path", [])
 
                 # check if a corresponding collection is in buckets and add doc count from there
                 # TODO add this to an extra agg function
-                doc_count = next((bucket.doc_count for bucket in buckets if bucket == _id), 0)
-                if doc_count <= doc_threshold and check_for_resources_in_subcollection(_id):
-                    collections.add(CollectionInfo(
-                        id=_id,
+                # TODO why do I not use the statistics query function here?
+                doc_count = next((bucket.doc_count for bucket in buckets if bucket == id), 0)
+                if doc_count <= doc_threshold and check_number_of_resources_in_collection(id):
+                    collections.add(Collection(
+                        id=id,
                         title=title,
                         count_total_resources=doc_count,
                         path=path))
             return collections
 
-        raw_collection_children = self.get_collection_children_by_id(collection_id)
-        collection_children: set[CollectionInfo] = parse_raw_collection_children(raw_collection_children)
-        return collection_children
+        if self.cache.fachportale_with_children:
+            return self.cache.fachportale_with_children[Collection(collection_id)]
+        else:
+            raw_collection_children = self.get_collection_children_by_id(collection_id)
+            collection_children: set[Collection] = parse_raw_collection_children(raw_collection_children)
+            return collection_children
 
-    def query_elastic(self, body, index, pretty: bool = True):
-        try:
-            r = self.es.search(body=body, index=index, pretty=pretty)
-            self.connection_retries = 0
-            return r
-        except ConnectionError:
-            if self.connection_retries < MAX_CONN_RETRIES:
-                self.connection_retries += 1
-                logger.error(
-                    f"Connection error while trying to reach elastic instance, trying again in 30 seconds. Retries {self.connection_retries}")
-                sleep(30)
-                return self.query_elastic(body, index, pretty)
+    def build_fachportale(self):
+        raw_collections: list[dict] = edu_sharing.get_collections()
+        fachportale = edu_sharing.parse_collections(raw_collections=raw_collections)
+        for item in fachportale:
+            count_total_resources: int = oeh.get_statisic_counts(collection_id=item.id, attribute="nodeRef.id").get("hits").get("total").get("value", 0)
+            item.count_total_resources = count_total_resources
+        return fachportale
 
-    def getBaseCondition(self, collection_id: str = None, additional_must: dict = None) -> dict:
+    def get_base_condition(self, collection_id: str = None, additional_must: dict = None) -> dict:
         must_conditions = [
             {"terms": {"type": ['ccm:io']}},
             {"terms": {"permissions.read": ['GROUP_EVERYONE']}},
@@ -224,7 +278,7 @@ class OEHElastic:
             }
         }
 
-    def getCollectionByMissingAttribute(self, collection_id: str, attribute: str, size: int = 10000) -> dict:
+    def get_collection_by_missing_attribute(self, collection_id: str, attribute: str, size: int = 10000) -> dict:
         """
         Returns an es-query-result with collections that have a given missing attribute.
         If count is set to 0, only the total number will be returned.
@@ -278,7 +332,7 @@ class OEHElastic:
         }
         return self.query_elastic(body=body, index="workspace", pretty=True)
 
-    def get_collection_info(self, id: str) -> CollectionInfo:
+    def get_collection_info(self, id: str) -> Collection:
         body = {
             "query": {
                 "bool": {
@@ -297,23 +351,29 @@ class OEHElastic:
             "track_total_hits": "true",
             "_source": SOURCE_FIELDS
         }
-        r = self.query_elastic(body=body, index="workspace", pretty=True)
+        if collection := next(f for f in self.cache.fachportale if f.id == id):
+            return collection
+        else:
+            r: dict = self.query_elastic(body=body, index="workspace", pretty=True)
+            collection = self.parse_query_result(r.get("hits", {}).get("hits")[0])
+            return collection
 
-        return self.query_elastic(body=body, index="workspace", pretty=True)
-
-    def parse_query_result(self, result: dict):
+    def parse_query_result(self, result: dict) -> Collection:
         id = result.get("_source").get("nodeRef").get("id")
         title = result.get("_source").get("properties").get("cm:title", "")
+        name = result.get("_source").get("properties").get("cm:name", "")
         path = result.get("_source").get("path", [])
+        doc_count = self.get_statisic_counts(collection_id=id).get("hits").get("total").get("value", 0)
 
-        return CollectionInfo(
+        return Collection(
             id=id,
             title=title,
-            path=path
+            name=name,
+            path=path,
+            count_total_resources=doc_count
         )
 
-
-    def getMaterialByMissingAttribute(self, collection_id: str, attribute: str, size: int = 10000) -> dict:
+    def get_material_by_missing_attribute(self, collection_id: str, attribute: str, size: int = 10000) -> dict:
         """
         Returns the es-query result for a given collection_id and the attribute.
         If count is set to 0, just the total number will be returned in the es-query-result.
@@ -322,7 +382,7 @@ class OEHElastic:
             "query": {
                 "bool": {
                     "must": [
-                        self.getBaseCondition(collection_id),
+                        self.get_base_condition(collection_id),
                     ],
                     "must_not": [{"wildcard": {attribute: "*"}}]
                 }
@@ -334,16 +394,17 @@ class OEHElastic:
         # pprint(body)
         return self.query_elastic(body=body, index="workspace", pretty=True)
 
-    def getStatisicCounts(self, collection_id: str,
-                          attribute: str = "properties.ccm:commonlicense_key.keyword") -> dict:
+    def get_statisic_counts(self, collection_id: str,
+                            attribute: str = "properties.ccm:commonlicense_key.keyword") -> dict:
         """
-        Returns count of values for a given attribute (default: license) in a collection
+        Returns count of values for a given attribute (default: license) in a collection.
+        Can also be used to get the total count of resources in a fachportal or collection.
         """
         body = {
             "query": {
                 "bool": {
                     "must": [
-                        self.getBaseCondition(collection_id),
+                        self.get_base_condition(collection_id),
                     ]
                 }
             },
@@ -377,7 +438,7 @@ class OEHElastic:
             "query": {
                 "bool": {
                     "must": [
-                        self.getBaseCondition(
+                        self.get_base_condition(
                             collection_id, additional_condition),
                     ]
                 }
@@ -576,40 +637,7 @@ class OEHElastic:
         """
         Returns the aggregations for a given attribute.
         """
-        # must_condition = {
-        #     "query": {
-        #         "bool": {
-        #             "must": [
-        #                 self.getBaseCondition(collection_id),
-        #             ]
-        #         }
-        #     }
-        # }
-        # if agg_type == "terms":
-        #     agg = {"terms": {
-        #         "field": attribute,
-        #         "size": size
-        #     }}
-        # elif agg_type == "missing":
-        #     agg = {
-        #         "missing": {
-        #             "field": attribute
-        #         }
-        #     }
-        # else:
-        #     raise ValueError(f"agg_type: {agg_type} is not allowed. Use one of [\"terms\", \"missing\"]")
-        #
-        # body = {
-        #     "size": 0,
-        #     "aggs": {
-        #         "my-agg": agg
-        #     }
-        # }
-        # if index == "workspace":
-        #     body.update(must_condition)
-        #
         r: dict = self.query_elastic(body=agg_query.body, index=agg_query.index, pretty=True)
-
         return r
 
     def build_buckets_from_agg(self, agg: dict, include_other: bool = False) -> list[Bucket]:
@@ -658,6 +686,10 @@ class OEHElastic:
 
 oeh = OEHElastic()
 
+logger.info("Hallo Info test")
+
+oeh.load_cache(update=False)
+
 if __name__ == "__main__":
     print("\n\n\n\n")
     r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
@@ -665,5 +697,7 @@ if __name__ == "__main__":
     r_parsed = [c.as_dict() for c in r]
     print(r)
 else:
-    r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
-    oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)
+    # r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
+    # oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)
+    # oeh.get_fachportale()
+    oeh.get_statisic_counts(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629")

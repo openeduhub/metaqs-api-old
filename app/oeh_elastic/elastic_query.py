@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 
 class ElasticQuery:
@@ -7,9 +7,9 @@ class ElasticQuery:
         self.collection_id: str = kwargs.get("collection_id", None)
         self.index: str = kwargs.get("index", "workspace")
         self.size: int = kwargs.get("size", 10000)
-        self.additional_must: dict = None
+        self.additional_must: Optional[dict] = None
 
-    def getBaseCondition(self) -> dict:
+    def get_base_condition(self) -> dict:
         must_conditions = [
             {"terms": {"type": ['ccm:io']}},
             {"terms": {"permissions.read": ['GROUP_EVERYONE']}},
@@ -53,7 +53,7 @@ class AggQuery(ElasticQuery):
             "query": {
                 "bool": {
                     "must": [
-                        self.getBaseCondition(),
+                        self.get_base_condition(),
                     ]
                 }
             }
@@ -82,3 +82,4 @@ class AggQuery(ElasticQuery):
             body.update(must_condition)
 
         return body
+

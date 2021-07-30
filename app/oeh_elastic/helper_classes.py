@@ -2,6 +2,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TypedDict, Literal, Optional, List
+from json import JSONEncoder
 
 from .constants import (ES_COLLECTION_URL, ES_NODE_URL,
                         ES_PREVIEW_URL)
@@ -25,6 +26,11 @@ class Bucket:
             "doc_count": self.doc_count
 
         }
+
+    @staticmethod
+    def from_json(item: dict):
+        return Bucket(key=item.get("key"), doc_count=item.get("doc_count"))
+
     def as_wc(self):
         return {
             "text": self.key,
@@ -41,26 +47,35 @@ class Bucket:
         return hash((self.key,))
 
 
+# TODO add more attribute documentation
 @dataclass
-class CollectionInfo:
-    id: str
-    path: List[str] = field(default_factory=list)
-    # es_url: str = field(init=False)
-    name: Optional[str] = ""
-    title: Optional[str] = ""
+class Collection:
+    """
+    Attributes:
+
+    - id: :class:`str` Id of the collection
+    - path: :class:`list[str]`
+    - es_url: :class:`str`
+    - count_total_resources :class:`Optional[int]` Total count of documents inside the collection
+    """
+    id: str  # id of collection
+    path: list[str] = field(default_factory=list)
+    es_url: str = field(init=False)
+    name: Optional[str] = None
+    title: Optional[str] = None
     type: Optional[str] = "ccm:map"
-    content_url: Optional[str] = ""
-    action: Optional[str] = ""
+    content_url: Optional[str] = None
+    action: Optional[str] = None
     count_total_resources: Optional[int] = 0
 
-    # def __post_init__(self):
-    #     if self.type == 'ccm:map':
-    #         self.es_url = ES_COLLECTION_URL.format(self.id)
-    #     else:
-    #         self.es_url = ES_NODE_URL.format(self.id, self.action)
+    def __post_init__(self):
+        if self.type == 'ccm:map':
+            self.es_url = ES_COLLECTION_URL.format(self.id)
+        else:
+            self.es_url = ES_NODE_URL.format(self.id, self.action)
 
     def __eq__(self, o: object) -> bool:
-        if isinstance(o, CollectionInfo):
+        if isinstance(o, Collection):
             return self.id == o.id
         else:
             return False
@@ -72,7 +87,7 @@ class CollectionInfo:
         return {
             "id": self.id,
             "path": self.path,
-            # "es_url": self.es_url,
+            "es_url": self.es_url,
             "name": self.name,
             "title": self.title,
             "type": self.type,
@@ -80,6 +95,24 @@ class CollectionInfo:
             "action": self.action,
             "count_total_resources": self.count_total_resources
         }
+
+    @staticmethod
+    def from_json(item: dict):
+        return Collection(
+            id=item.get("id"),
+            path=item.get("path", []),
+            name=item.get("name", None),
+            title=item.get("title", None),
+            type=item.get("type", "ccm:map"),
+            content_url=item.get("content_url", None),
+            action=item.get("action", None),
+            count_total_resources=item.get("count_total_resources", 0)
+        )
+
+
+class CollectionEncoder(JSONEncoder):
+    def default(self, o: Collection):
+        return o.as_dict()
 
 
 @dataclass

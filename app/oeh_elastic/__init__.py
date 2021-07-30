@@ -1,2 +1,2 @@
 from .elastic_query import AggQuery
-from .oeh_elastic import oeh, EduSharing
+from .oeh import oeh, EduSharing
