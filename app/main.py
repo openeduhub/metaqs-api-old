@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from numpy import inf
 
 from app.oeh_elastic.helper_classes import Collection, CollectionChildrenResponse, CollectionResponse
-from app.oeh_elastic.oeh import OEHElastic
+from app.oeh_elastic.oeh import oeh
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
