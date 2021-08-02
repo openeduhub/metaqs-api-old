@@ -59,7 +59,7 @@ class Collection:
     - count_total_resources :class:`Optional[int]` Total count of documents inside the collection
     """
     id: str  # id of collection
-    path: list[str] = field(default_factory=list)
+    path: Optional[list[str]] = field(default_factory=list)
     es_url: str = field(init=False)
     name: Optional[str] = None
     title: Optional[str] = None
@@ -167,3 +167,14 @@ class QueryParams:
     size: int = None  # number of elements to return from query
     agg_type: Literal["terms", "missing"] = None
     additional_must: dict = None
+
+
+@dataclass
+class CollectionChildrenResponse:
+    id: Collection
+    children: List[Collection]
+
+
+@dataclass
+class CollectionResponse:
+    id: Collection

@@ -5,11 +5,6 @@ import yaml
 
 from app.main import app
 
-# setup logger
-with open('app/config.yml') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
-    logging.config.dictConfig(config)
-
 
 if __name__ == "__main__":
     logger.setLevel(logging.DEBUG)

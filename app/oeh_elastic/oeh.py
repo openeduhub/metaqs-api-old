@@ -7,13 +7,14 @@ from time import sleep
 from typing import Generator, Literal, Union
 
 import pandas as pd
-import requests
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import ConnectionError
 from numpy import inf
 
-from app.oeh_elastic.constants import MAX_CONN_RETRIES, SOURCE_FIELDS, ANALYTICS_INITIAL_COUNT
+from app.main import oeh
+from app.oeh_elastic.edu_sharing import EduSharing, edu_sharing
+from app.oeh_elastic.constants import MAX_CONN_RETRIES, SOURCE_FIELDS
 from app.oeh_elastic.elastic_query import AggQuery
 from app.oeh_cache.oeh_cache import Cache
 from app.oeh_elastic.helper_classes import Bucket, Collection, SearchedMaterialInfo
@@ -22,63 +23,6 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-
-class EduSharing:
-    connection_retries: int = 0
-
-    @classmethod
-    def get_collections(cls) -> list[dict]:
-        ES_COLLECTIONS_URL = "https://redaktion.openeduhub.net/edu-sharing/rest/collection/v1/collections/local/5e40e372-735c-4b17-bbf7-e827a5702b57/children/collections?scope=TYPE_EDITORIAL&skipCount=0&maxItems=1247483647&sortProperties=cm%3Acreated&sortAscending=true&"
-
-        headers = {
-            "Accept": "application/json"
-        }
-
-        params = {
-            "scope": "TYPE_EDITORIAL",
-            "skipCount": "0",
-            "maxItems": "1247483647",
-            "sortProperties": "cm%3Acreated",
-            "sortAscending": "true"
-        }
-
-        logger.info(f"Collecting Collections from edu-sharing...")
-
-        try:
-            r_collections: list = requests.get(
-                ES_COLLECTIONS_URL,
-                headers=headers,
-                params=params
-            ).json().get("collections")
-            cls.connection_retries = 0
-            return r_collections
-
-        except:
-            if cls.connection_retries < MAX_CONN_RETRIES:
-                cls.connection_retries += 1
-                logger.error(
-                    f"Connection error trying to reach edu-sharing repository, trying again in 30 seconds. Retries: {cls.connection_retries}")
-                sleep(30)
-                return EduSharing.get_collections()
-
-    def parse_collections(self, raw_collections: list[dict]) -> set[Collection]:
-        collections = set()
-        for item in raw_collections:
-            title = item.get("title", None)
-            name = item.get("name", None)
-            _type = item.get("type", None)
-            id = item.get("ref", {}).get("id", None)
-            collections.add(Collection(
-                id=id,
-                name=name,
-                title=title,
-                type=_type
-            ))
-        return collections
-
-
-edu_sharing = EduSharing()
 
 
 class OEHElastic:
@@ -113,13 +57,21 @@ class OEHElastic:
                 return self.query_elastic(body, index, pretty)
 
     def load_cache(self, update: bool = False):
-        if self.cache.load_cache() and update is False:
-            return True
-        else:
+        if update is False:
+            if self.cache.load_cache():
+                return True
+            else:
+                logger.warning("could not load cache...building...")
+                self.build_cache()
+                self.save_cache()
+        elif update:
+            logger.info("Updating cache")
             self.build_cache()
             self.save_cache()
 
+
     def build_cache(self):
+        self.cache.empty_cache()
         logger.info("Building collecition bucket cache...")
         self.cache.collection_buckets = self.build_collection_buckets_cache()
         logger.info("Building fachportale cache...")
@@ -216,18 +168,14 @@ class OEHElastic:
                 return False
 
         def parse_raw_collection_children(raw_collection_children: dict) -> set[Collection]:
-            buckets = self.get_collection_buckets()
             collections = set()
             for item in raw_collection_children.get("hits", {}).get("hits", []):
                 # TODO add this to a parse function
                 id = item.get("_source").get("nodeRef").get("id")
                 title = item.get("_source").get("properties").get("cm:title", "")
                 path = item.get("_source").get("path", [])
+                doc_count = oeh.get_statisic_counts(collection_id=id, attribute="nodeRef.id").get("hits").get("total").get("value", 0)
 
-                # check if a corresponding collection is in buckets and add doc count from there
-                # TODO add this to an extra agg function
-                # TODO why do I not use the statistics query function here?
-                doc_count = next((bucket.doc_count for bucket in buckets if bucket == id), 0)
                 if doc_count <= doc_threshold and check_number_of_resources_in_collection(id):
                     collections.add(Collection(
                         id=id,
@@ -237,8 +185,10 @@ class OEHElastic:
             return collections
 
         if self.cache.fachportale_with_children:
+            logger.info("Returning result from cache")
             return self.cache.fachportale_with_children[Collection(collection_id)]
         else:
+            logger.info("Querying elastic")
             raw_collection_children = self.get_collection_children_by_id(collection_id)
             collection_children: set[Collection] = parse_raw_collection_children(raw_collection_children)
             return collection_children
@@ -685,9 +635,6 @@ class OEHElastic:
 
 
 oeh = OEHElastic()
-
-logger.info("Hallo Info test")
-
 oeh.load_cache(update=False)
 
 if __name__ == "__main__":
@@ -696,8 +643,4 @@ if __name__ == "__main__":
     r = oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)
     r_parsed = [c.as_dict() for c in r]
     print(r)
-else:
-    # r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
-    # oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)
-    # oeh.get_fachportale()
-    oeh.get_statisic_counts(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629")
+

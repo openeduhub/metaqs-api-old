@@ -67,7 +67,11 @@ class Cache:
         with self.filename.open("r") as f:
             data = json.load(f)
 
-        self.collection_buckets = [Bucket.from_json(item) for item in data["collection_buckets"]]
+        # TODO maybe it makes more sense to load and save the cache seperatly and raise errors when one of them is not available
+        if collection_buckets := data["collection_buckets"]:
+            self.collection_buckets = [Bucket.from_json(item) for item in collection_buckets]
+        else:
+            raise KeyError("Collection Buckets not found")
         self.fachportale = [Collection.from_json(item) for item in data["fachportale"]]
         self.fachportale_with_children = self.deserialize_fachportale_with_children(data["fachportale_with_children"])
 
@@ -79,6 +83,12 @@ class Cache:
         else:
             logger.warning("Could not load cache from disk!")
             return False
+
+    def empty_cache(self):
+        logger.info("Emptying cache...")
+        self.collection_buckets = []
+        self.fachportale = []
+        self.fachportale_with_children = {}
 
 # if __name__ == "__main__":
 #     c = Cache()
