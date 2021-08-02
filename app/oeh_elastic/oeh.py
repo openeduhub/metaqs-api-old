@@ -122,81 +122,80 @@ class OEHElastic:
         """
         logger.info(f"getting collections with threshold of \"{doc_threshold}\" and key: \"{collection_id}\"")
 
-        # TODO This might be useful in some other case, so maybe put it outside as class method
-        def check_number_of_resources_in_collection(collection_id: str) -> bool:
-            """
-            Checks if there are resources (ccm:io) that have a given collection id in there path.
-            We check if the total hits are lower than or equal the doc_threshold value, because that indicates
-            how many documents are present in that collection.
-            :param collection_id:
-            :return:
-            """
-            body = {
-                "query": {
-                    "bool": {
-                        "must": [
-                            {
-                                "terms": {
-                                    "type": [
-                                        "ccm:io"
-                                    ]
-                                }
-                            },
-                            {
-                                "bool": {
-                                    "should": [
-                                        {
-                                            "match": {
-                                                "path": collection_id
-                                            }
-                                        }
-                                    ]
-                                }
-                            }
-                        ]
-                    }
-                },
-                "_source": SOURCE_FIELDS
-            }
-            r = self.query_elastic(body=body, index="workspace")
-            total_hits = r.get("hits").get("total").get("value")
-
-            if total_hits <= doc_threshold:
-                return True
-            else:
-                return False
-
-        def parse_raw_collection_children(raw_collection_children: dict) -> set[Collection]:
-            collections = set()
-            for item in raw_collection_children.get("hits", {}).get("hits", []):
-                # TODO add this to a parse function
-                id = item.get("_source").get("nodeRef").get("id")
-                title = item.get("_source").get("properties").get("cm:title", "")
-                path = item.get("_source").get("path", [])
-                doc_count = oeh.get_statisic_counts(collection_id=id, attribute="nodeRef.id").get("hits").get("total").get("value", 0)
-
-                if doc_count <= doc_threshold and check_number_of_resources_in_collection(id):
-                    collections.add(Collection(
-                        id=id,
-                        title=title,
-                        count_total_resources=doc_count,
-                        path=path))
-            return collections
-
         if self.cache.fachportale_with_children:
             logger.info("Returning result from cache")
             return self.cache.fachportale_with_children[Collection(collection_id)]
         else:
             logger.info("Querying elastic")
             raw_collection_children = self.get_collection_children_by_id(collection_id)
-            collection_children: set[Collection] = parse_raw_collection_children(raw_collection_children)
+            collection_children: set[Collection] = self.parse_raw_collection_children(raw_collection_children, doc_threshold=doc_threshold)
             return collection_children
+
+    def check_number_of_resources_in_collection(self, collection_id: str, doc_threshold: int) -> bool:
+        """
+        Checks if there are resources (ccm:io) that have a given collection id in there path.
+        We check if the total hits are lower than or equal the doc_threshold value, because that indicates
+        how many documents are present in that collection.
+        :param collection_id:
+        :return:
+        """
+        body = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {
+                            "terms": {
+                                "type": [
+                                    "ccm:io"
+                                ]
+                            }
+                        },
+                        {
+                            "bool": {
+                                "should": [
+                                    {
+                                        "match": {
+                                            "path": collection_id
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            "_source": SOURCE_FIELDS
+        }
+        r = self.query_elastic(body=body, index="workspace")
+        total_hits = r.get("hits").get("total").get("value")
+
+        if total_hits <= doc_threshold:
+            return True
+        else:
+            return False
+
+    def parse_raw_collection_children(self, raw_collection_children: dict, doc_threshold: int) -> set[Collection]:
+        collections = set()
+        for item in raw_collection_children.get("hits", {}).get("hits", []):
+            # TODO add this to a parse function
+            id = item.get("_source").get("nodeRef").get("id")
+            title = item.get("_source").get("properties").get("cm:title", "")
+            path = item.get("_source").get("path", [])
+            doc_count = self.get_statisic_counts(collection_id=id, attribute="nodeRef.id").get("hits").get("total").get("value", 0)
+
+            if doc_count <= doc_threshold and self.check_number_of_resources_in_collection(id, doc_threshold=doc_threshold):
+                collections.add(Collection(
+                    id=id,
+                    title=title,
+                    count_total_resources=doc_count,
+                    path=path))
+        return collections
 
     def build_fachportale(self):
         raw_collections: list[dict] = edu_sharing.get_collections()
         fachportale = edu_sharing.parse_collections(raw_collections=raw_collections)
         for item in fachportale:
-            count_total_resources: int = oeh.get_statisic_counts(collection_id=item.id, attribute="nodeRef.id").get("hits").get("total").get("value", 0)
+            count_total_resources: int = self.get_statisic_counts(collection_id=item.id, attribute="nodeRef.id").get("hits").get("total").get("value", 0)
             item.count_total_resources = count_total_resources
         return fachportale
 
@@ -633,10 +632,9 @@ class OEHElastic:
         return sorted_search
 
 
-oeh = OEHElastic()
-oeh.load_cache(update=False)
-
 if __name__ == "__main__":
+    oeh = OEHElastic()
+    oeh.load_cache(update=False)
     print("\n\n\n\n")
     r = oeh.get_collection_info(id="4940d5da-9b21-4ec0-8824-d16e0409e629")
     r = oeh.get_collection_children(collection_id="4940d5da-9b21-4ec0-8824-d16e0409e629", doc_threshold=inf)

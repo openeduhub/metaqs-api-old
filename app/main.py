@@ -4,12 +4,15 @@ from fastapi import FastAPI
 from numpy import inf
 
 from app.oeh_elastic.helper_classes import Collection, CollectionChildrenResponse, CollectionResponse
-from app.oeh_elastic.oeh import oeh
+from app.oeh_elastic.oeh import OEHElastic
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
+
+oeh = OEHElastic()
+oeh.load_cache(update=False)
 
 
 @app.get("/")
