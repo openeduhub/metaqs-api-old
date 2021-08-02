@@ -12,7 +12,6 @@ from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import ConnectionError
 from numpy import inf
 
-from app.main import oeh
 from app.oeh_elastic.edu_sharing import EduSharing, edu_sharing
 from app.oeh_elastic.constants import MAX_CONN_RETRIES, SOURCE_FIELDS
 from app.oeh_elastic.elastic_query import AggQuery
