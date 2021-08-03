@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI()
 
 oeh = OEHElastic()
-oeh.load_cache(update=False)
+oeh.load_cache()
 
 
 @app.get("/")
@@ -28,19 +28,17 @@ def get_fachportale():
     return {"fachportale": parsed_collections}
 
 
-@app.get("/fachportale/{id}", response_model=CollectionResponse)
+@app.get("/fachportale/{id}")
 def get_fachportal_by_id(id: str):
     raw_id = oeh.get_collection_info(id=id)
     parsed_id = raw_id.as_dict()
     return {"id": parsed_id}
 
 
-@app.get("/fachportale/{id}/children", response_model=CollectionChildrenResponse)
+@app.get("/fachportale/{id}/children")
 def get_collection_children(id: str):
     raw_id = oeh.get_collection_info(id=id)
     parsed_id = raw_id.as_dict()
-    raw_children: set[Collection] = oeh.get_collection_children(
-        collection_id=id,
-        doc_threshold=inf)
+    raw_children: set[Collection] = oeh.get_collection_children(collection_id=id)
     parsed_children = [c.as_dict() for c in raw_children]
     return {"id": parsed_id, "children": parsed_children}

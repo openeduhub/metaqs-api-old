@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from app.oeh_elastic.helper_classes import Bucket, Collection, CollectionEncoder
+from app.oeh_elastic.helper_classes import Bucket, Collection
 
 import json
 from pathlib import Path
@@ -12,8 +12,7 @@ logger = logging.getLogger(__name__)
 class Cache:
     cache_dir: Path = Path.cwd() / Path("app") / Path("cache")
     filename: Path = field(init=False)
-    collection_buckets: list[Bucket] = field(default_factory=list)  # list of collections and how often they  appear in resources
-    fachportale: list[Collection] = field(default_factory=list)  # list of fachportale
+    fachportale: set[Collection] = field(default_factory=set)  # list of fachportale
     fachportale_with_children: dict[Collection, set[Collection]] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -38,12 +37,11 @@ class Cache:
         return True
 
     def serialize_attributes(self):
-        collections_bucket = [b.as_dict() for b in self.collection_buckets]
         fachportale = [c.as_dict() for c in self.fachportale]
         fachportale_with_children = self.serialize_fachportale_with_children()
 
-        to_cache = [collections_bucket, fachportale, fachportale_with_children]
-        cache_keys = ["collection_buckets", "fachportale", "fachportale_with_children"]
+        to_cache = [fachportale, fachportale_with_children]
+        cache_keys = ["fachportale", "fachportale_with_children"]
         cache = {
             k: v for k, v in zip(cache_keys, to_cache)
         }
@@ -67,12 +65,7 @@ class Cache:
         with self.filename.open("r") as f:
             data = json.load(f)
 
-        # TODO maybe it makes more sense to load and save the cache seperatly and raise errors when one of them is not available
-        if collection_buckets := data["collection_buckets"]:
-            self.collection_buckets = [Bucket.from_json(item) for item in collection_buckets]
-        else:
-            raise KeyError("Collection Buckets not found")
-        self.fachportale = [Collection.from_json(item) for item in data["fachportale"]]
+        self.fachportale = {Collection.from_json(item) for item in data["fachportale"]}
         self.fachportale_with_children = self.deserialize_fachportale_with_children(data["fachportale_with_children"])
 
     def load_cache(self):
@@ -86,8 +79,7 @@ class Cache:
 
     def empty_cache(self):
         logger.info("Emptying cache...")
-        self.collection_buckets = []
-        self.fachportale = []
+        self.fachportale = set()
         self.fachportale_with_children = {}
 
 # if __name__ == "__main__":

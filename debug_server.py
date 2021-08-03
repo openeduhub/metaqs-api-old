@@ -1,14 +1,12 @@
 import uvicorn
 from fastapi.logger import logger
 import logging
-import yaml
 
-from app.main import app
+from app.main import app, oeh
 
 
 if __name__ == "__main__":
     logger.setLevel(logging.DEBUG)
-    logger.info("Hello there")
     uvicorn.run(
         "debug_server:app",
         host="0.0.0.0",
