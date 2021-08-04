@@ -44,6 +44,11 @@ class OEHElastic:
                 return self.query_elastic(body, index, pretty)
 
     def load_cache(self, update: bool = False):
+        """
+        Loads the in-memory cache.
+        :param update:
+        :return:
+        """
         if update is False:
             if self.cache.load_cache():
                 return True
@@ -57,6 +62,10 @@ class OEHElastic:
             self.save_cache()
 
     def build_cache(self):
+        """
+        Builds in-memory-cache.
+        :return:
+        """
         self.cache.empty_cache()
         logger.info("Building fachportale cache...")
         self.cache.fachportale = self.build_fachportale()
@@ -72,13 +81,18 @@ class OEHElastic:
         :return: dict[Collection, set[Collection]]
         """
         fachportale_with_children = {}
-        # TODO for testing
-        for item in list(self.cache.fachportale)[:1]:
+        # FIXME for testing
+        for item in self.cache.fachportale:
+        # for item in list(self.cache.fachportale)[:1]:
             children = self.get_collection_children(collection_id=item.id)
             fachportale_with_children[item] = children
         return fachportale_with_children
 
     def get_fachportale(self) -> set[Collection]:
+        """
+        Returns a set of current available Fachportale.
+        :return: set[Collection]
+        """
         if self.cache.fachportale:
             return self.cache.fachportale
         else:
@@ -118,7 +132,7 @@ class OEHElastic:
 
     def parse_raw_collection(self, elastic_response: dict) -> Collection:
         """
-        Parses a response from elastic and build a Collection out of it.
+        Parses a response from elastic and builds a Collection out of it.
 
         :param elastic_response: Response from elastic query.
         :return: Collection
@@ -151,10 +165,12 @@ class OEHElastic:
             count_total_resources: int = self.count_total_resources_of_collection(item)
             item.count_total_resources = count_total_resources
 
+            # add licenses and information about missing resources
             licenses_info = self.get_licenses_for_collection(id=item.id)
             item.licenses = licenses_info.licenses_dict
             item.resources_with_no_licenses = licenses_info.missing_licenses
 
+            # add information about resources with no description
             item.resources_with_no_description = self.get_resources_with_no_description()
         return fachportale
 
@@ -180,6 +196,12 @@ class OEHElastic:
             "value", 0)
 
     def get_base_condition(self, collection_id: str = None, additional_must: dict = None) -> dict:
+        """
+        Builds the base condition for querying resources.
+        :param collection_id: str
+        :param additional_must: dict: Can be added it additional must criteria have to be added
+        :return: dict
+        """
         must_conditions = [
             {"terms": {"type": ['ccm:io']}},
             {"terms": {"permissions.read": ['GROUP_EVERYONE']}},
@@ -262,33 +284,25 @@ class OEHElastic:
         }
         return self.query_elastic(body=body, index="workspace", pretty=True)
 
-    def get_collection_info(self, id: str) -> Collection:
-        body = {
-            "query": {
-                "bool": {
-                    "must": [
-                        {"terms": {"type": ["ccm:map"]}},
-                        {"bool": {
-                            "should": [
-                                {"match": {"nodeRef.id": id}},
-                            ]
-                        }
-                        }
-                    ]
-                }
-            },
-            "size": 10000,
-            "track_total_hits": "true",
-            "_source": SOURCE_FIELDS
-        }
-        if collection := next(f for f in self.cache.fachportale if f.id == id):
-            return collection
+    def get_fachportal_info(self, id: str) -> Collection:
+        """
+        Checks whether an id is present as a fachportal and returns its information.
+
+        :param id:
+        :return: Collection
+        """
+        if fachportal := next(f for f in self.cache.fachportale if f.id == id):
+            return fachportal
         else:
-            r: dict = self.query_elastic(body=body, index="workspace", pretty=True)
-            collection = self.parse_query_result(r.get("hits", {}).get("hits")[0])
-            return collection
+            raise KeyError(f"Fachportal with id \"{id}\" not found")
 
     def parse_query_result(self, result_item: dict) -> Union[Collection, GeneralResource]:
+        """
+        Parses an elastic query result and returns a Collection or GeneralResource depending
+        on the type of the item.
+        :param result_item: dict: Item form elastic result["hits"]["hits"]
+        :return: Union[Collection, GeneralResource]
+        """
         id = result_item.get("_source").get("nodeRef").get("id")
         title = result_item.get("_source").get("properties").get("cm:title", None)
         name = result_item.get("_source").get("properties").get("cm:name", None)
@@ -335,13 +349,25 @@ class OEHElastic:
         }
         return self.query_elastic(body=body, index="workspace", pretty=True)
 
-    # TODO This could also be a generic query to find license info for every collection
     def get_licenses_for_collection(self, id: str) -> LicenseInfo:
+        """
+        Queries elastic for licenses in a collection. Returns a instance of a class License info which contains an overview
+        of present licenses and IDs of resources that have no license at all.
+        :param id: str: ID of collection
+        :return: LicenseInfo
+        """
         missing_licenses, sorted_licenses = self.parse_licenses_from_elastic(id)
 
         return LicenseInfo(licenses_dict=sorted_licenses, missing_licenses=missing_licenses)
 
     def parse_licenses_from_elastic(self, id: str) -> tuple[set, dict]:
+        """
+        Parses the licenses from elastic and aggregates the information.
+
+        :param id: str: ID of collection to query for licenses
+        :return: tuple[set, dict]: the set contains the ids of resources that have no licenses, the dict contains an overview
+        of present licenses in that collection
+        """
         license_agg: dict = self.get_statistic_counts(
             collection_id=id,
             aggregation_name="license",
@@ -371,6 +397,13 @@ class OEHElastic:
         return missing_licenses, sorted_licenses
 
     def sort_licenses(self, licenses: list[Bucket], count_missing_licenses: int) -> dict[str, int]:
+        """
+        Sorts the licenses in wlo defined criteria.
+
+        :param licenses:
+        :param count_missing_licenses:
+        :return:
+        """
         oer_cols = ["CC_0", "CC_BY", "CC_BY_SA", "PDM"]
         cc_but_not_oer = ["CC_BY_NC", "CC_BY_NC_ND",
                           "CC_BY_NC_SA", "CC_BY_SA_NC", "CC_BY_ND"]
